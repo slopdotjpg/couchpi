@@ -1,0 +1,24 @@
+[
+  {
+    "name": "RetroArch",
+    "launch": "retroarch",
+    "icon": "~/.config/tv-launcher/icons/retroarch.svg"
+  },
+  {
+    "name": "Jellyfin",
+    "launch": "jellyfinmediaplayer",
+    "icon": "~/.config/tv-launcher/icons/jellyfin.svg"
+  },
+  {
+    "name": "YouTube",
+    "url": "https://www.youtube.com",
+    "launch": "chromium-browser --kiosk https://www.youtube.com",
+    "icon": null
+  },
+  {
+    "name": "Home Assistant",
+    "url": "http://homeassistant.local:8123",
+    "launch": "chromium-browser --kiosk http://homeassistant.local:8123",
+    "icon": null
+  }
+]
