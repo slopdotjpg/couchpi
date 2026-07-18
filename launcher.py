@@ -229,6 +229,44 @@ def fetch_favicon(entry: AppEntry) -> Path | None:
     return None
 
 
+def _flatpak_app_id(launch_cmd: str) -> str | None:
+    """Extract the app-id from a 'flatpak run [flags] <app-id>' command."""
+    parts = launch_cmd.split()
+    try:
+        idx = parts.index("run")
+    except ValueError:
+        return None
+    # app-id is the first non-flag token after 'run'
+    for token in parts[idx + 1:]:
+        if not token.startswith("-"):
+            return token
+    return None
+
+
+def _find_flatpak_icon(app_id: str) -> Path | None:
+    """
+    Search XDG icon dirs (including Flatpak exports) for <app-id>.svg/.png.
+    Flatpak installs icons to ~/.local/share/flatpak/exports/share/icons/
+    following the hicolor theme layout.
+    """
+    roots = [
+        Path.home() / ".local/share/flatpak/exports/share/icons",
+        Path("/var/lib/flatpak/exports/share/icons"),
+        Path.home() / ".local/share/icons",
+        Path("/usr/share/icons"),
+    ]
+    size_prefs = ["scalable", "256x256", "128x128", "64x64", "48x48"]
+    for root in roots:
+        if not root.exists():
+            continue
+        for size in size_prefs:
+            for ext in ("svg", "png"):
+                candidate = root / "hicolor" / size / "apps" / f"{app_id}.{ext}"
+                if candidate.exists():
+                    return candidate
+    return None
+
+
 def resolve_icon(entry: AppEntry) -> Path | None:
     """Return a resolved icon path for an app entry, or None."""
     if entry.icon_path:
@@ -240,6 +278,13 @@ def resolve_icon(entry: AppEntry) -> Path | None:
         cached = fetch_favicon(entry)
         if cached:
             return cached
+
+    # For Flatpak apps, look up the icon by app-id in the Flatpak icon exports
+    app_id = _flatpak_app_id(entry.launch_cmd)
+    if app_id:
+        icon = _find_flatpak_icon(app_id)
+        if icon:
+            return icon
 
     return None
 
@@ -292,7 +337,12 @@ class AppTile(Gtk.Box):
                 return
             except Exception:
                 pass
-        # Fallback: use a theme icon
+        # For Flatpak apps try the app-id as an icon theme name; GTK will find
+        # it if XDG_DATA_DIRS includes the Flatpak export share path
+        app_id = _flatpak_app_id(self.entry.launch_cmd)
+        if app_id:
+            self._icon_widget.set_from_icon_name(app_id)
+            return
         self._icon_widget.set_from_icon_name("application-x-executable")
 
     def refresh_state(self) -> None:
@@ -501,11 +551,21 @@ class LauncherWindow(Gtk.ApplicationWindow):
     def _setup_css(self) -> None:
         provider = Gtk.CssProvider()
         provider.load_from_data(CSS)
+        display = Gdk.Display.get_default()
         Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(),
+            display,
             provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
+        # Register Flatpak icon export dirs so GTK icon theme lookup finds them
+        # even when XDG_DATA_DIRS isn't set up (common in minimal Labwc sessions)
+        theme = Gtk.IconTheme.get_for_display(display)
+        for icon_dir in [
+            Path.home() / ".local/share/flatpak/exports/share/icons",
+            Path("/var/lib/flatpak/exports/share/icons"),
+        ]:
+            if icon_dir.exists():
+                theme.add_search_path(str(icon_dir))
 
     # ------------------------------------------------------------------
     # Input: keyboard + gamepad
