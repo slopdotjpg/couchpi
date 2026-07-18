@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — install couchpi and configure Labwc on Raspberry Pi OS Bookworm
+# setup.sh — install couchpi and configure Labwc on Raspberry Pi OS (Bookworm or Trixie)
 # Run as your normal user (NOT root). sudo is used only where needed.
 set -euo pipefail
 
@@ -10,7 +10,8 @@ LABWC_DIR="$HOME/.config/labwc"
 TV_DIR="$HOME/.config/tv-launcher"
 
 # ---------------------------------------------------------------------------
-# 1. System packages
+# 1. System packages (everything except gtk4-layer-shell, which isn't packaged
+#    in Debian Trixie/Bookworm yet and must be built from source below)
 # ---------------------------------------------------------------------------
 echo "==> Installing system packages..."
 sudo apt-get update -q
@@ -19,29 +20,90 @@ sudo apt-get install -y \
     python3-gi-cairo \
     gir1.2-gtk-4.0 \
     libgtk-4-dev \
-    gtk4-layer-shell \
-    gir1.2-gtk4-layer-shell \
     fonts-noto-color-emoji \
     python3-requests \
-    labwc
+    labwc \
+    git \
+    meson \
+    ninja-build \
+    libwayland-dev \
+    wayland-protocols \
+    gobject-introspection \
+    libgirepository1.0-dev \
+    pkg-config
 
-# gtk4-layer-shell GIR name differs by distro; try both
+# ---------------------------------------------------------------------------
+# 2. Build gtk4-layer-shell from source
+#    gtk4-layer-shell is not yet in Raspberry Pi OS / Debian apt repos.
+#    Source: https://github.com/wmww/gtk4-layer-shell
+# ---------------------------------------------------------------------------
+
+# Check if already installed and working
 GIR_OK=0
 python3 -c "
 import gi
 gi.require_version('GtkLayerShell', '0.1')
 from gi.repository import GtkLayerShell
-print('GtkLayerShell GIR: OK')
-" && GIR_OK=1 || true
+" 2>/dev/null && GIR_OK=1 || true
 
-if [ "$GIR_OK" -eq 0 ]; then
-    echo "WARNING: GtkLayerShell GIR typelib not found via apt."
-    echo "         You may need to build gtk4-layer-shell from source:"
-    echo "         https://github.com/wmww/gtk4-layer-shell"
+if [ "$GIR_OK" -eq 1 ]; then
+    echo "==> gtk4-layer-shell already installed, skipping build."
+else
+    echo "==> Building gtk4-layer-shell from source (this takes ~2 minutes)..."
+
+    BUILD_DIR="$(mktemp -d)"
+    trap 'rm -rf "$BUILD_DIR"' EXIT
+
+    git clone --depth=1 https://github.com/wmww/gtk4-layer-shell.git "$BUILD_DIR/gtk4-layer-shell"
+    cd "$BUILD_DIR/gtk4-layer-shell"
+
+    meson setup build \
+        -Dexamples=false \
+        -Ddocs=false \
+        -Dtests=false \
+        --prefix=/usr/local
+
+    ninja -C build
+    sudo ninja -C build install
+    sudo ldconfig
+
+    # On some systems the typelib ends up in /usr/local/lib/<arch>/girepository-1.0/
+    # but Python's gi only searches /usr/lib. Add a symlink to bridge the gap.
+    TYPELIB=$(find /usr/local/lib -name 'GtkLayerShell-0.1.typelib' 2>/dev/null | head -1)
+    if [ -n "$TYPELIB" ]; then
+        GI_SYSTEM_DIR=$(python3 -c "
+import gi, os
+# gi searches these paths for typelibs
+search_paths = gi.get_overrides_search_path() if hasattr(gi, 'get_overrides_search_path') else []
+# fall back to the standard system path
+print('/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo aarch64-linux-gnu)/girepository-1.0')
+")
+        sudo mkdir -p "$GI_SYSTEM_DIR"
+        sudo ln -sf "$TYPELIB" "$GI_SYSTEM_DIR/GtkLayerShell-0.1.typelib"
+        echo "    Linked typelib: $TYPELIB -> $GI_SYSTEM_DIR/GtkLayerShell-0.1.typelib"
+    fi
+
+    cd "$SCRIPT_DIR"
+
+    # Verify
+    python3 -c "
+import gi
+gi.require_version('GtkLayerShell', '0.1')
+from gi.repository import GtkLayerShell
+print('    GtkLayerShell: OK')
+" || {
+        echo ""
+        echo "ERROR: GtkLayerShell import still failing after build."
+        echo "Try running: sudo ldconfig && python3 -c \"import gi; gi.require_version('GtkLayerShell','0.1'); from gi.repository import GtkLayerShell\""
+        echo "If the typelib is in /usr/local/lib/.../girepository-1.0/, set:"
+        echo "  export GI_TYPELIB_PATH=/usr/local/lib/\$(gcc -dumpmachine)/girepository-1.0"
+        echo "and add that line to ~/.bash_profile."
+        exit 1
+    }
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Launcher config directory
+# 3. Launcher config directory
 # ---------------------------------------------------------------------------
 echo "==> Setting up ~/.config/tv-launcher/ ..."
 mkdir -p "$TV_DIR/icons"
@@ -54,7 +116,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Labwc config directory
+# 4. Labwc config directory
 # ---------------------------------------------------------------------------
 echo "==> Configuring Labwc..."
 mkdir -p "$LABWC_DIR"
@@ -73,7 +135,6 @@ fi
 RC="$LABWC_DIR/rc.xml"
 
 if [ ! -f "$RC" ]; then
-    # Write a minimal rc.xml with just the keybind
     cat > "$RC" <<'RCXML'
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_config xmlns="http://openbox.org/3.4/rc">
@@ -89,7 +150,6 @@ RCXML
     sed -i "s|LAUNCHER_PLACEHOLDER|$LAUNCHER|g" "$RC"
     echo "    Created $RC with Home key binding."
 else
-    # Check if keybind already present
     if ! grep -qF "$LAUNCHER" "$RC"; then
         echo ""
         echo "    NOTICE: $RC already exists."
@@ -107,12 +167,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Make launcher executable
+# 5. Make launcher executable
 # ---------------------------------------------------------------------------
 chmod +x "$LAUNCHER"
 
 # ---------------------------------------------------------------------------
-# 5. Verify
+# 6. Final verification
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Verifying Python imports..."

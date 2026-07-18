@@ -165,13 +165,32 @@ python3 /path/to/couchpi/launcher.py &
 
 | Package | Install |
 |---|---|
-| python3-gi | `sudo apt install python3-gi` |
-| gir1.2-gtk-4.0 | `sudo apt install gir1.2-gtk-4.0` |
-| gtk4-layer-shell | `sudo apt install gtk4-layer-shell gir1.2-gtk4-layer-shell` |
+| python3-gi, gir1.2-gtk-4.0 | `sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 libgtk-4-dev` |
 | python3-requests | `sudo apt install python3-requests` |
 | fonts-noto-color-emoji | `sudo apt install fonts-noto-color-emoji` |
+| gtk4-layer-shell | **Build from source** — see below |
 
-All dependencies are available in Raspberry Pi OS Bookworm's default apt repositories.
+### gtk4-layer-shell (source build)
+
+`gtk4-layer-shell` is not yet packaged in Raspberry Pi OS (Bookworm or Trixie). `setup.sh` handles this automatically, but if you want to do it manually:
+
+```bash
+sudo apt install meson ninja-build libgtk-4-dev libwayland-dev \
+                 wayland-protocols gobject-introspection libgirepository1.0-dev
+
+git clone --depth=1 https://github.com/wmww/gtk4-layer-shell.git
+cd gtk4-layer-shell
+meson setup build -Dexamples=false -Ddocs=false -Dtests=false --prefix=/usr/local
+ninja -C build
+sudo ninja -C build install
+sudo ldconfig
+```
+
+If Python can't find the typelib after install, set:
+```bash
+export GI_TYPELIB_PATH=/usr/local/lib/$(gcc -dumpmachine)/girepository-1.0
+```
+Add that line to `~/.bash_profile` to make it permanent.
 
 ---
 
