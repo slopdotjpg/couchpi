@@ -298,6 +298,9 @@ class AppTile(Gtk.Box):
         self._dot.set_visible(self.entry.is_running)
 
     def set_selected(self, selected: bool) -> None:
+        # XMB effect: selected icon is larger, unselected icons are dimmer
+        self._icon_widget.set_pixel_size(110 if selected else 72)
+        self._icon_widget.set_opacity(1.0 if selected else 0.55)
         if selected:
             self.add_css_class("selected-tile")
         else:
@@ -350,39 +353,41 @@ class SubMenu(Gtk.Box):
 
 CSS = b"""
 window {
-    background-color: #0d0d0d;
+    background: linear-gradient(160deg, #0d2b0d 0%, #1a5c1a 50%, #092009 100%);
 }
 .app-label {
-    color: #e0e0e0;
-    font-size: 13px;
+    color: #ffffff;
+    font-size: 14px;
+    text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
 }
-.selected-tile {
-    background-color: #2a2a2a;
-    border-radius: 12px;
+.selected-tile .app-label {
+    font-weight: bold;
 }
 .running-dot {
-    color: #4caf50;
-    font-size: 14px;
-    padding: 4px;
+    color: #a0ffa0;
+    font-size: 12px;
+    padding: 2px;
 }
 .submenu {
-    background-color: #1a1a1a;
-    border: 1px solid #333;
-    border-radius: 8px;
-    padding: 8px 16px;
+    background: rgba(0, 0, 0, 0.55);
+    border-left: 3px solid rgba(255,255,255,0.6);
+    border-radius: 0 6px 6px 0;
+    padding: 6px 24px 6px 12px;
+    margin-top: 8px;
 }
 .submenu-item {
-    color: #aaaaaa;
-    font-size: 15px;
-    padding: 4px 0;
+    color: #cccccc;
+    font-size: 16px;
+    padding: 2px 0;
 }
 .submenu-selected {
     color: #ffffff;
     font-weight: bold;
 }
-.hint-label {
-    color: #555555;
-    font-size: 12px;
+.clock-label {
+    color: #ffffff;
+    font-size: 15px;
+    text-shadow: 1px 1px 4px rgba(0,0,0,0.9);
 }
 """
 
@@ -428,19 +433,35 @@ class LauncherWindow(Gtk.ApplicationWindow):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        import datetime
+
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         root.set_vexpand(True)
 
-        # Spacer above
-        top_spacer = Gtk.Box()
-        top_spacer.set_vexpand(True)
+        # Top bar: clock on the right, matching PSP XMB style
+        top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        top_bar.set_margin_top(12)
+        top_bar.set_margin_end(20)
+        top_bar.set_hexpand(True)
+        filler = Gtk.Box()
+        filler.set_hexpand(True)
+        self._clock_label = Gtk.Label()
+        self._clock_label.add_css_class("clock-label")
+        top_bar.append(filler)
+        top_bar.append(self._clock_label)
+        self._tick_clock()
+
+        # Vertical spacer pushes icons to vertical centre
+        mid_spacer = Gtk.Box()
+        mid_spacer.set_vexpand(True)
 
         # Horizontal row of tiles
         self._tiles_box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL, spacing=24
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=32
         )
         self._tiles_box.set_halign(Gtk.Align.CENTER)
         self._tiles_box.set_valign(Gtk.Align.CENTER)
+        self._tiles_box.set_margin_bottom(8)
 
         self._tiles: list[AppTile] = []
         for entry in self.entries:
@@ -453,24 +474,24 @@ class LauncherWindow(Gtk.ApplicationWindow):
         self._submenu.set_halign(Gtk.Align.CENTER)
         self._submenu.set_visible(False)
 
-        # Hint bar at bottom
-        hint = Gtk.Label(
-            label="← → navigate  ↑ ↓ submenu  Enter confirm  Esc hide"
-        )
-        hint.add_css_class("hint-label")
-        hint.set_halign(Gtk.Align.CENTER)
-        hint_box = Gtk.Box()
-        hint_box.set_margin_bottom(18)
-        hint_box.set_halign(Gtk.Align.CENTER)
-        hint_box.append(hint)
+        # Bottom spacer balances the layout
+        bot_spacer = Gtk.Box()
+        bot_spacer.set_vexpand(True)
 
-        root.append(top_spacer)
+        root.append(top_bar)
+        root.append(mid_spacer)
         root.append(self._tiles_box)
         root.append(self._submenu)
-        root.append(hint_box)
+        root.append(bot_spacer)
 
         self.set_child(root)
         self._update_selection()
+
+    def _tick_clock(self) -> bool:
+        import datetime
+        now = datetime.datetime.now()
+        self._clock_label.set_text(now.strftime("%A  %d %B  %H:%M"))
+        return True
 
     def _setup_css(self) -> None:
         provider = Gtk.CssProvider()
@@ -513,8 +534,6 @@ class LauncherWindow(Gtk.ApplicationWindow):
             self._nav_vertical(1)
         elif key in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
             self._confirm()
-        elif key == Gdk.KEY_Escape:
-            self.hide_launcher()
         elif key == Gdk.KEY_Super_L or key == Gdk.KEY_Super_R:
             self.hide_launcher()
 
@@ -636,11 +655,12 @@ class LauncherWindow(Gtk.ApplicationWindow):
     # ------------------------------------------------------------------
 
     def _start_refresh_timer(self) -> None:
-        def _tick():
-            self._update_selection()
-            return True  # keep repeating
+        GLib.timeout_add(1000, self._tick_clock)
+        GLib.timeout_add(2000, self._tick_state)
 
-        GLib.timeout_add(2000, _tick)
+    def _tick_state(self) -> bool:
+        self._update_selection()
+        return True
 
 # ---------------------------------------------------------------------------
 # Application

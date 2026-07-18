@@ -10,6 +10,11 @@
     "icon": "~/.config/tv-launcher/icons/jellyfin.svg"
   },
   {
+    "name": "FreeTube",
+    "launch": "/home/chef/freetube.AppImage --start-fullscreen --no-sandbox --ozone-platform=wayland",
+    "icon": null
+  },
+  {
     "name": "YouTube",
     "url": "https://www.youtube.com",
     "launch": "chromium-browser --kiosk https://www.youtube.com",
