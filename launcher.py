@@ -41,6 +41,11 @@ if _extra_gi:
     if _extra not in _existing:
         os.environ["GI_TYPELIB_PATH"] = f"{_extra}:{_existing}" if _existing else _extra
 
+# HiDPI scaling for 4K TVs. GDK_SCALE=2 makes GTK render at logical half-resolution
+# (1920×1080) and scale up — doubles UI size and cuts GPU load 4×. Override with
+# GDK_SCALE=1 in the environment if you're on a 1080p display.
+os.environ.setdefault("GDK_SCALE", "2")
+
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")
@@ -400,6 +405,7 @@ class LauncherWindow(Gtk.ApplicationWindow):
         self._setup_css()
         self._setup_input()
         self._start_refresh_timer()
+        self.set_cursor(Gdk.Cursor.new_from_name("none", None))
 
     # ------------------------------------------------------------------
     # Layer shell setup — this is what makes the launcher overlay everything
@@ -611,6 +617,8 @@ class LauncherWindow(Gtk.ApplicationWindow):
 
     def show_launcher(self) -> None:
         self._visible = True
+        # Hide the mouse cursor — this is a TV/couch interface driven by keyboard/gamepad
+        self.set_cursor(Gdk.Cursor.new_from_name("none", None))
         self.present()
 
     def hide_launcher(self) -> None:
@@ -619,6 +627,7 @@ class LauncherWindow(Gtk.ApplicationWindow):
         self._in_sub = False
         self._submenu.reset()
         self._update_selection()
+        self.set_cursor(None)  # restore default cursor for underlying apps
         self.set_visible(False)
 
     def toggle_visibility(self) -> None:
