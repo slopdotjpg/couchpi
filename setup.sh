@@ -1,191 +1,169 @@
 #!/usr/bin/env bash
-# setup.sh — install couchpi and configure Labwc on Raspberry Pi OS (Bookworm or Trixie)
-# Run as your normal user (NOT root). sudo is used only where needed.
+# couchpi setup script
+# Installs dependencies, writes default config, patches Labwc autostart and rc.xml
+
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LAUNCHER="$SCRIPT_DIR/launcher.py"
-
+LAUNCHER_SRC="$(cd "$(dirname "$0")" && pwd)/launcher.py"
+CONFIG_DIR="$HOME/.config/couchpi"
 LABWC_DIR="$HOME/.config/labwc"
-TV_DIR="$HOME/.config/tv-launcher"
+AUTOSTART="$LABWC_DIR/autostart"
+RC_XML="$LABWC_DIR/rc.xml"
+TOGGLE_SCRIPT="$CONFIG_DIR/toggle.py"
+
+ok()   { echo "[OK]   $*"; }
+info() { echo "[INFO] $*"; }
+fail() { echo "[FAIL] $*" >&2; }
 
 # ---------------------------------------------------------------------------
-# 1. System packages (everything except gtk4-layer-shell, which isn't packaged
-#    in Debian Trixie/Bookworm yet and must be built from source below)
+# 1. Install apt dependencies
 # ---------------------------------------------------------------------------
-echo "==> Installing system packages..."
-sudo apt-get update -q
-sudo apt-get install -y \
+
+info "Installing apt dependencies..."
+sudo apt-get update -qq
+if sudo apt-get install -y \
     python3-gi \
     python3-gi-cairo \
     gir1.2-gtk-4.0 \
-    libgtk-4-dev \
-    fonts-noto-color-emoji \
-    python3-requests \
-    labwc \
-    wlr-randr \
-    git \
-    meson \
-    ninja-build \
-    libwayland-dev \
-    wayland-protocols \
-    gobject-introspection \
-    libgirepository1.0-dev \
-    pkg-config
-
-# ---------------------------------------------------------------------------
-# 2. Build gtk4-layer-shell from source
-#    gtk4-layer-shell is not yet in Raspberry Pi OS / Debian apt repos.
-#    Source: https://github.com/wmww/gtk4-layer-shell
-# ---------------------------------------------------------------------------
-
-# Check if already installed (look for the shared library; the typelib may be in
-# /usr/local which isn't in Python's default search path — launcher.py handles that)
-GIR_OK=0
-ldconfig -p 2>/dev/null | grep -q libgtk4-layer-shell && GIR_OK=1 || true
-
-if [ "$GIR_OK" -eq 1 ]; then
-    echo "==> gtk4-layer-shell already installed, skipping build."
+    gir1.2-gtklayershell-0.1 \
+    python3-evdev; then
+    ok "apt dependencies installed"
 else
-    echo "==> Building gtk4-layer-shell from source (this takes ~2 minutes)..."
-
-    BUILD_DIR="$(mktemp -d)"
-    trap 'rm -rf "$BUILD_DIR"' EXIT
-
-    git clone --depth=1 https://github.com/wmww/gtk4-layer-shell.git "$BUILD_DIR/gtk4-layer-shell"
-    cd "$BUILD_DIR/gtk4-layer-shell"
-
-    meson setup build \
-        -Dexamples=false \
-        -Ddocs=false \
-        -Dtests=false \
-        -Dvapi=false \
-        --prefix=/usr/local
-
-    ninja -C build
-    sudo ninja -C build install
-    sudo ldconfig
-
-    cd "$SCRIPT_DIR"
-
-    # Verify — set GI_TYPELIB_PATH here the same way launcher.py does at runtime
-    EXTRA_GI=$(find /usr/local/lib -maxdepth 3 -name 'Gtk4LayerShell-1.0.typelib' \
-                    -exec dirname {} \; 2>/dev/null | head -1)
-    GI_TYPELIB_PATH="${EXTRA_GI:+$EXTRA_GI:}${GI_TYPELIB_PATH:-}" \
-    python3 -c "
-import gi
-gi.require_version('Gtk4LayerShell', '1.0')
-from gi.repository import Gtk4LayerShell
-print('    Gtk4LayerShell: OK')
-" || {
-        echo ""
-        echo "ERROR: Gtk4LayerShell import still failing after build."
-        TYPELIB=$(find /usr/local/lib -name 'Gtk4LayerShell-1.0.typelib' 2>/dev/null | head -1)
-        if [ -n "$TYPELIB" ]; then
-            TYPELIB_DIR=$(dirname "$TYPELIB")
-            echo "Typelib found at: $TYPELIB"
-            echo "Try: GI_TYPELIB_PATH=$TYPELIB_DIR python3 launcher.py"
-        fi
-        exit 1
-    }
+    fail "apt install failed — check your internet connection and apt sources"
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Launcher config directory
+# 2. Ensure config directory exists
 # ---------------------------------------------------------------------------
-echo "==> Setting up ~/.config/tv-launcher/ ..."
-mkdir -p "$TV_DIR/icons"
 
-if [ ! -f "$TV_DIR/apps.json" ]; then
-    cp "$SCRIPT_DIR/apps.json.example" "$TV_DIR/apps.json"
-    echo "    Copied example apps.json — edit $TV_DIR/apps.json to add your apps."
+mkdir -p "$CONFIG_DIR/icons"
+ok "Config directory: $CONFIG_DIR"
+
+# ---------------------------------------------------------------------------
+# 3. Write default apps.json if missing
+# ---------------------------------------------------------------------------
+
+APPS_JSON="$CONFIG_DIR/apps.json"
+if [ ! -f "$APPS_JSON" ]; then
+    cat > "$APPS_JSON" <<'JSON'
+[
+  {
+    "name": "RetroArch",
+    "launch": "retroarch",
+    "icon": null
+  },
+  {
+    "name": "Jellyfin",
+    "url": "http://localhost:8096",
+    "launch": "chromium --kiosk http://localhost:8096",
+    "icon": null
+  }
+]
+JSON
+    ok "Written default apps.json"
 else
-    echo "    apps.json already exists, leaving it alone."
+    info "apps.json already exists, skipping"
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Labwc config directory
+# 4. Install launcher.py to config dir
 # ---------------------------------------------------------------------------
-echo "==> Configuring Labwc..."
+
+cp "$LAUNCHER_SRC" "$CONFIG_DIR/launcher.py"
+chmod +x "$CONFIG_DIR/launcher.py"
+ok "Installed launcher.py → $CONFIG_DIR/launcher.py"
+
+# ---------------------------------------------------------------------------
+# 5. Write toggle.py (used by the Home key binding)
+# ---------------------------------------------------------------------------
+
+cat > "$TOGGLE_SCRIPT" <<'PYEOF'
+#!/usr/bin/env python3
+"""Connect to couchpi's IPC socket to toggle visibility.
+If couchpi is not running, launch it instead."""
+import socket, subprocess, sys, os
+
+SOCKET_PATH = os.path.expanduser("~/.config/couchpi/couchpi.sock")
+LAUNCHER = os.path.expanduser("~/.config/couchpi/launcher.py")
+
+try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(SOCKET_PATH)
+    s.close()
+except (FileNotFoundError, ConnectionRefusedError):
+    subprocess.Popen(
+        ["python3", LAUNCHER],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+PYEOF
+chmod +x "$TOGGLE_SCRIPT"
+ok "Written toggle.py → $TOGGLE_SCRIPT"
+
+# ---------------------------------------------------------------------------
+# 6. Patch Labwc autostart
+# ---------------------------------------------------------------------------
+
 mkdir -p "$LABWC_DIR"
+touch "$AUTOSTART"
 
-# --- autostart ---
-# wlr-randr forces 1080p on the first HDMI output before the launcher starts.
-# GDK_SCALE is not honoured by GTK4 on Wayland — the compositor owns scaling.
-# RPi5 HDMI 0 = HDMI-A-1, HDMI 1 = HDMI-A-2. Adjust if your output differs
-# (run `wlr-randr` inside a Labwc session to list connected outputs and modes).
-AUTOSTART="$LABWC_DIR/autostart"
-if ! grep -qF "wlr-randr" "$AUTOSTART" 2>/dev/null; then
-    echo "wlr-randr --output HDMI-A-1 --mode 1920x1080" >> "$AUTOSTART"
-    echo "    Added wlr-randr 1080p mode-set to $AUTOSTART"
+AUTOSTART_LINE="python3 $CONFIG_DIR/launcher.py &"
+if grep -qF "$CONFIG_DIR/launcher.py" "$AUTOSTART"; then
+    info "autostart already contains launcher, skipping"
 else
-    echo "    wlr-randr already in autostart, skipping."
-fi
-if ! grep -qF "$LAUNCHER" "$AUTOSTART" 2>/dev/null; then
-    echo "python3 $LAUNCHER &" >> "$AUTOSTART"
-    echo "    Added launcher to $AUTOSTART"
-else
-    echo "    Launcher already in autostart, skipping."
+    echo "$AUTOSTART_LINE" >> "$AUTOSTART"
+    ok "Added launcher to $AUTOSTART"
 fi
 
-# --- rc.xml: Home key binding ---
-RC="$LABWC_DIR/rc.xml"
+# ---------------------------------------------------------------------------
+# 7. Patch Labwc rc.xml with Home key binding
+# ---------------------------------------------------------------------------
 
-if [ ! -f "$RC" ]; then
-    cat > "$RC" <<'RCXML'
+touch "$RC_XML"
+
+HOME_KEYBIND='    <keybind key="Home">
+      <action name="Execute">
+        <command>python3 '"$TOGGLE_SCRIPT"'</command>
+      </action>
+    </keybind>'
+
+if grep -q "couchpi\|toggle.py" "$RC_XML" 2>/dev/null; then
+    info "rc.xml already contains couchpi binding, skipping"
+elif [ ! -s "$RC_XML" ]; then
+    # File is empty — write a minimal rc.xml
+    cat > "$RC_XML" <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_config xmlns="http://openbox.org/3.4/rc">
   <keyboard>
-    <keybind key="Super_L">
-      <action name="Execute">
-        <command>python3 LAUNCHER_PLACEHOLDER</command>
-      </action>
-    </keybind>
+$HOME_KEYBIND
   </keyboard>
 </openbox_config>
-RCXML
-    sed -i "s|LAUNCHER_PLACEHOLDER|$LAUNCHER|g" "$RC"
-    echo "    Created $RC with Home key binding."
+XML
+    ok "Written minimal rc.xml with Home binding"
 else
-    if ! grep -qF "$LAUNCHER" "$RC"; then
-        echo ""
-        echo "    NOTICE: $RC already exists."
-        echo "    Add the following keybind inside the <keyboard> section manually:"
-        echo ""
-        echo "    <keybind key=\"Super_L\">"
-        echo "      <action name=\"Execute\">"
-        echo "        <command>python3 $LAUNCHER</command>"
-        echo "      </action>"
-        echo "    </keybind>"
-        echo ""
+    # File exists — insert before </keyboard> if present, else before </openbox_config>
+    if grep -q "</keyboard>" "$RC_XML"; then
+        sed -i "s|</keyboard>|$HOME_KEYBIND\n  </keyboard>|" "$RC_XML"
+        ok "Inserted Home binding into <keyboard> block in rc.xml"
     else
-        echo "    Keybind already present in $RC, skipping."
+        sed -i "s|</openbox_config>|  <keyboard>\n$HOME_KEYBIND\n  </keyboard>\n</openbox_config>|" "$RC_XML"
+        ok "Created <keyboard> block and inserted Home binding in rc.xml"
     fi
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Make launcher executable
+# Done
 # ---------------------------------------------------------------------------
-chmod +x "$LAUNCHER"
-
-# ---------------------------------------------------------------------------
-# 6. Final verification
-# ---------------------------------------------------------------------------
-echo ""
-echo "==> Verifying Python imports..."
-EXTRA_GI=$(find /usr/local/lib -maxdepth 3 -name 'Gtk4LayerShell-1.0.typelib' \
-                -exec dirname {} \; 2>/dev/null | head -1)
-GI_TYPELIB_PATH="${EXTRA_GI:+$EXTRA_GI:}${GI_TYPELIB_PATH:-}" python3 - <<'PYCHECK'
-import gi
-gi.require_version("Gtk", "4.0")
-gi.require_version("Gtk4LayerShell", "1.0")
-from gi.repository import Gtk, Gtk4LayerShell
-print("  GTK4: OK")
-print("  Gtk4LayerShell: OK")
-PYCHECK
 
 echo ""
-echo "==> Setup complete!"
-echo "    1. Edit $TV_DIR/apps.json to add your apps."
-echo "    2. Log into a Labwc session (or reboot)."
-echo "    3. Press the Super/Home key to open the launcher."
+echo "couchpi setup complete!"
+echo "  Config:     $CONFIG_DIR"
+echo "  Launcher:   $CONFIG_DIR/launcher.py"
+echo "  Apps:       $APPS_JSON"
+echo "  Autostart:  $AUTOSTART"
+echo "  rc.xml:     $RC_XML"
+echo ""
+echo "Restart Labwc (or reboot) for autostart and key bindings to take effect."
+echo "To test immediately: python3 $CONFIG_DIR/launcher.py"

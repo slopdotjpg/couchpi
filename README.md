@@ -1,199 +1,101 @@
 # couchpi
 
-A PSP/XMB-style fullscreen TV launcher for Raspberry Pi 5, running on Raspberry Pi OS Lite with Labwc (Wayland). Navigate your apps with a remote keyboard or knockoff gamepad, launch and kill them without leaving the couch.
+A fullscreen TV launcher for Raspberry Pi 5, styled after the PS3 XMB (CrossMediaBar) interface.
 
----
-
-## Full stack overview
+## Stack
 
 ```
-Raspberry Pi OS Bookworm Lite (headless base)
-  └── Labwc (Wayland compositor, wlroots-based)
-        ├── couchpi launcher (GTK4 + gtk4-layer-shell, overlay layer)
-        ├── RetroArch (gaming frontend)
-        ├── Jellyfin Media Player (media)
-        └── Chromium (kiosk mode for web apps)
+Raspberry Pi OS Bookworm (Lite, 64-bit)
+  └── Labwc (Wayland compositor, wlr-protocols)
+        └── couchpi (GTK4 + gtk4-layer-shell, wlr-layer-shell overlay)
+              ├── App icons (SVG/PNG/ICO, auto-fetched for web apps)
+              ├── Process management (detached subprocesses, PID tracking)
+              ├── IPC (Unix socket for Home key toggle)
+              └── Gamepad input (evdev, d-pad + A button)
 ```
 
-**Why this stack?**
+### Why each layer
 
-| Component | Why |
-|-----------|-----|
-| RPi OS Lite | No desktop bloat; starts faster and leaves more RAM for emulation |
-| Labwc | Lightweight wlroots Wayland compositor; supports layer-shell protocol |
-| gtk4-layer-shell | Lets a GTK4 window claim a Wayland overlay layer, so it sits *above* all other apps without killing them |
-| Python + GTK4 | Single-file, readable, easy to hack |
+**Raspberry Pi OS Lite** — minimal Debian base without a desktop environment. Gives full control over what runs; nothing wasted on a GUI stack we don't use.
 
----
+**Labwc** — a wlr-based Wayland compositor that implements the `wlr-layer-shell` protocol. This is the protocol that allows couchpi to claim a fullscreen OVERLAY layer on top of all other windows. X11-based compositors don't support this. GNOME/KDE do, but they're too heavy and add their own shell on top.
 
-## Hardware
-
-- Raspberry Pi 5 (4 GB or 8 GB)
-- Any HDMI TV or monitor
-- Cheap IR remote keyboard (arrow keys + Enter)
-- Optional: knockoff PS3 / generic gamepad (D-pad + face buttons)
-
----
+**GTK4 + gtk4-layer-shell** — GTK4 is the modern toolkit with Wayland-native rendering. `gtk4-layer-shell` is a small library that wires a GTK4 window to `wlr-layer-shell`, letting it become a proper layer surface rather than a regular application window. Without this, the window would be managed by the compositor just like any other app.
 
 ## Installation
 
-### 1. Flash and boot
-
-Flash Raspberry Pi OS Bookworm **Lite** (64-bit) with the Raspberry Pi Imager. Enable SSH in the imager's settings if you want headless setup.
-
-### 2. Install a Wayland session
-
 ```bash
-sudo apt install labwc xwayland
-```
-
-Configure Labwc to start on login (or use `~/.bash_profile`):
-
-```bash
-# ~/.bash_profile
-if [ -z "$WAYLAND_DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
-    exec labwc
-fi
-```
-
-### 3. Install couchpi
-
-```bash
-git clone https://github.com/slopdotjpg/couchpi.git
+git clone https://github.com/slopdotjpg/couchpi
 cd couchpi
-bash setup.sh
+chmod +x setup.sh
+./setup.sh
 ```
 
 `setup.sh` will:
-- Install all apt and pip dependencies
-- Create `~/.config/tv-launcher/apps.json` from the example
-- Append the launcher to `~/.config/labwc/autostart`
-- Add the Super/Home key binding to `~/.config/labwc/rc.xml`
+- Install apt dependencies (`python3-gi`, `gir1.2-gtklayershell-0.1`, `python3-evdev`, etc.)
+- Copy `launcher.py` to `~/.config/couchpi/`
+- Write a default `~/.config/couchpi/apps.json`
+- Add couchpi to Labwc's `autostart`
+- Add a `Home` key binding to Labwc's `rc.xml`
 
-### 4. Configure your apps
+Reboot or restart Labwc for changes to take effect.
 
-Edit `~/.config/tv-launcher/apps.json`:
+## Configuration
+
+Edit `~/.config/couchpi/apps.json`:
 
 ```json
 [
   {
     "name": "RetroArch",
     "launch": "retroarch",
-    "icon": "~/.config/tv-launcher/icons/retroarch.svg"
+    "icon": "~/.config/couchpi/icons/retroarch.svg"
   },
   {
-    "name": "Jellyfin",
-    "launch": "jellyfinmediaplayer",
-    "icon": null
-  },
-  {
-    "name": "Home Assistant",
-    "url": "http://homeassistant.local:8123",
-    "launch": "chromium-browser --kiosk http://homeassistant.local:8123",
+    "name": "My Web App",
+    "url": "http://localhost:3000",
+    "launch": "chromium --kiosk http://localhost:3000",
     "icon": null
   }
 ]
 ```
 
-Apps with a `url` and no `icon` will have their favicon fetched automatically on first launch and cached in `~/.config/tv-launcher/icons/`.
+When `icon` is `null` and `url` is set, couchpi fetches the favicon automatically on first launch and caches it in `~/.config/couchpi/icons/`.
 
-### 5. Reboot or restart Labwc
+### Theming
 
-```bash
-labwc --reconfigure   # or just reboot
+Edit `~/.config/couchpi/style.css`. The file is created with defaults on first run. Changes take effect on next launcher start.
+
+## Controls
+
+| Input | Action |
+|-------|--------|
+| ← → arrow keys | Navigate apps |
+| ↑ ↓ arrow keys | Navigate submenu (Launch / Kill) |
+| Enter | Confirm action |
+| Escape / Home | Toggle launcher visibility |
+| Gamepad d-pad | Same as arrow keys |
+| Gamepad A / Cross | Same as Enter |
+
+## Files
+
 ```
-
----
-
-## Usage
-
-| Key / Button | Action |
-|---|---|
-| ← / → (arrow or D-pad) | Navigate between apps |
-| ↓ | Open the submenu for the selected app |
-| ↑ / ↓ | Navigate submenu (Launch / Kill) |
-| Enter / A button | Confirm selection |
-| Escape / Home / Super | Hide the launcher |
-
-A green dot on an app icon means a tracked process for that app is currently running.
-
----
-
-## How it works
-
-### Layer shell overlay
-
-`gtk4-layer-shell` uses the `wlr-layer-shell` Wayland protocol to create a surface on the **overlay** layer. This is above normal windows and even above fullscreen apps, so the launcher appears on top of RetroArch or Jellyfin without needing to kill them first.
-
-### IPC / toggle
-
-When you press Home, Labwc executes `python3 launcher.py`. The script checks for a running instance via a Unix socket (`/tmp/couchpi.sock`). If found, it sends a `toggle` command and exits — so the existing process shows or hides itself. If not found, it becomes the server and starts fresh.
-
-### Process management
-
-Apps are launched as detached subprocesses (new session group) so they survive if the launcher crashes or restarts. The launcher tracks PIDs in memory during its session and uses `os.kill(pid, 0)` to check liveness.
-
-### Focus / bring-to-front (Wayland limitation)
-
-Wayland intentionally prevents apps from stealing focus. When you "Launch" an already-running app, couchpi attempts an XDG Activation request via `gdbus`, but the compositor is not required to honour it. On Labwc this works for well-behaved Wayland clients. XWayland clients may not respond — this is a known protocol limitation, not a bug.
-
-### Gamepad
-
-The gamepad thread reads raw joystick events from `/dev/input/js0` using Python's `struct` module — no extra libraries needed. If no gamepad is connected the thread exits silently.
-
----
-
-## Labwc configuration reference
-
-`~/.config/labwc/autostart` — start the launcher when Labwc starts:
+~/.config/couchpi/
+  launcher.py     — main launcher (copied here by setup.sh)
+  toggle.py       — IPC toggle script (invoked by Home key binding)
+  apps.json       — app definitions
+  style.css       — GTK4 CSS theme
+  pids.json       — tracked PIDs (survives restarts)
+  icons/          — cached favicons and custom icons
+  couchpi.sock    — Unix socket (created at runtime)
 ```
-python3 /path/to/couchpi/launcher.py &
-```
-
-`~/.config/labwc/rc.xml` — bind Super/Home key:
-```xml
-<keybind key="Super_L">
-  <action name="Execute">
-    <command>python3 /path/to/couchpi/launcher.py</command>
-  </action>
-</keybind>
-```
-
----
 
 ## Dependencies
 
-| Package | Install |
-|---|---|
-| python3-gi, gir1.2-gtk-4.0 | `sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 libgtk-4-dev` |
-| python3-requests | `sudo apt install python3-requests` |
-| fonts-noto-color-emoji | `sudo apt install fonts-noto-color-emoji` |
-| gtk4-layer-shell | **Build from source** — see below |
-
-### gtk4-layer-shell (source build)
-
-`gtk4-layer-shell` is not yet packaged in Raspberry Pi OS (Bookworm or Trixie). `setup.sh` handles this automatically, but if you want to do it manually:
-
-```bash
-sudo apt install meson ninja-build libgtk-4-dev libwayland-dev \
-                 wayland-protocols gobject-introspection libgirepository1.0-dev
-
-git clone --depth=1 https://github.com/wmww/gtk4-layer-shell.git
-cd gtk4-layer-shell
-meson setup build -Dexamples=false -Ddocs=false -Dtests=false -Dvapi=false --prefix=/usr/local
-ninja -C build
-sudo ninja -C build install
-sudo ldconfig
 ```
-
-If Python can't find the typelib after install, set:
-```bash
-export GI_TYPELIB_PATH=/usr/local/lib/$(gcc -dumpmachine)/girepository-1.0
+sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-gtklayershell-0.1 python3-evdev
 ```
-Add that line to `~/.bash_profile` to make it permanent.
-
----
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT
