@@ -38,13 +38,10 @@ sudo apt-get install -y \
 #    Source: https://github.com/wmww/gtk4-layer-shell
 # ---------------------------------------------------------------------------
 
-# Check if already installed and working
+# Check if already installed (look for the shared library; the typelib may be in
+# /usr/local which isn't in Python's default search path — launcher.py handles that)
 GIR_OK=0
-python3 -c "
-import gi
-gi.require_version('GtkLayerShell', '0.1')
-from gi.repository import GtkLayerShell
-" 2>/dev/null && GIR_OK=1 || true
+ldconfig -p 2>/dev/null | grep -q libgtk4-layer-shell && GIR_OK=1 || true
 
 if [ "$GIR_OK" -eq 1 ]; then
     echo "==> gtk4-layer-shell already installed, skipping build."
@@ -68,37 +65,26 @@ else
     sudo ninja -C build install
     sudo ldconfig
 
-    # On some systems the typelib ends up in /usr/local/lib/<arch>/girepository-1.0/
-    # but Python's gi only searches /usr/lib. Add a symlink to bridge the gap.
-    TYPELIB=$(find /usr/local/lib -name 'GtkLayerShell-0.1.typelib' 2>/dev/null | head -1)
-    if [ -n "$TYPELIB" ]; then
-        GI_SYSTEM_DIR=$(python3 -c "
-import gi, os
-# gi searches these paths for typelibs
-search_paths = gi.get_overrides_search_path() if hasattr(gi, 'get_overrides_search_path') else []
-# fall back to the standard system path
-print('/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo aarch64-linux-gnu)/girepository-1.0')
-")
-        sudo mkdir -p "$GI_SYSTEM_DIR"
-        sudo ln -sf "$TYPELIB" "$GI_SYSTEM_DIR/GtkLayerShell-0.1.typelib"
-        echo "    Linked typelib: $TYPELIB -> $GI_SYSTEM_DIR/GtkLayerShell-0.1.typelib"
-    fi
-
     cd "$SCRIPT_DIR"
 
-    # Verify
+    # Verify — set GI_TYPELIB_PATH here the same way launcher.py does at runtime
+    EXTRA_GI=$(find /usr/local/lib -maxdepth 3 -name 'Gtk4LayerShell-1.0.typelib' \
+                    -exec dirname {} \; 2>/dev/null | head -1)
+    GI_TYPELIB_PATH="${EXTRA_GI:+$EXTRA_GI:}${GI_TYPELIB_PATH:-}" \
     python3 -c "
 import gi
-gi.require_version('GtkLayerShell', '0.1')
-from gi.repository import GtkLayerShell
-print('    GtkLayerShell: OK')
+gi.require_version('Gtk4LayerShell', '1.0')
+from gi.repository import Gtk4LayerShell
+print('    Gtk4LayerShell: OK')
 " || {
         echo ""
-        echo "ERROR: GtkLayerShell import still failing after build."
-        echo "Try running: sudo ldconfig && python3 -c \"import gi; gi.require_version('GtkLayerShell','0.1'); from gi.repository import GtkLayerShell\""
-        echo "If the typelib is in /usr/local/lib/.../girepository-1.0/, set:"
-        echo "  export GI_TYPELIB_PATH=/usr/local/lib/\$(gcc -dumpmachine)/girepository-1.0"
-        echo "and add that line to ~/.bash_profile."
+        echo "ERROR: Gtk4LayerShell import still failing after build."
+        TYPELIB=$(find /usr/local/lib -name 'Gtk4LayerShell-1.0.typelib' 2>/dev/null | head -1)
+        if [ -n "$TYPELIB" ]; then
+            TYPELIB_DIR=$(dirname "$TYPELIB")
+            echo "Typelib found at: $TYPELIB"
+            echo "Try: GI_TYPELIB_PATH=$TYPELIB_DIR python3 launcher.py"
+        fi
         exit 1
     }
 fi
@@ -177,13 +163,15 @@ chmod +x "$LAUNCHER"
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Verifying Python imports..."
-python3 - <<'PYCHECK'
+EXTRA_GI=$(find /usr/local/lib -maxdepth 3 -name 'Gtk4LayerShell-1.0.typelib' \
+                -exec dirname {} \; 2>/dev/null | head -1)
+GI_TYPELIB_PATH="${EXTRA_GI:+$EXTRA_GI:}${GI_TYPELIB_PATH:-}" python3 - <<'PYCHECK'
 import gi
 gi.require_version("Gtk", "4.0")
-gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gtk, GtkLayerShell
+gi.require_version("Gtk4LayerShell", "1.0")
+from gi.repository import Gtk, Gtk4LayerShell
 print("  GTK4: OK")
-print("  GtkLayerShell: OK")
+print("  Gtk4LayerShell: OK")
 PYCHECK
 
 echo ""

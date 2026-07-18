@@ -3,11 +3,17 @@
 # couchpi/launcher.py — PSP/XMB-style TV launcher for Raspberry Pi 5
 #
 # DEPENDENCIES (install before running):
-#   sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 \
-#                    gir1.2-gtk4-layer-shell libgtk4-layer-shell-dev \
+#   sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 libgtk-4-dev \
+#                    meson ninja-build libwayland-dev wayland-protocols \
+#                    gobject-introspection libgirepository1.0-dev \
 #                    python3-requests fonts-noto-color-emoji
 #
-#   pip3 install requests  # if not available via apt
+#   gtk4-layer-shell must be built from source (not in apt repos on RPi OS):
+#     git clone https://github.com/wmww/gtk4-layer-shell && cd gtk4-layer-shell
+#     meson setup build -Dexamples=false -Ddocs=false -Dtests=false -Dvapi=false \
+#           --prefix=/usr/local && ninja -C build && sudo ninja -C build install
+#     sudo ldconfig
+#   (setup.sh does all of this automatically)
 #
 # WAYLAND FOCUS NOTE:
 #   Wayland intentionally prevents apps from stealing focus. When "Launch"
@@ -22,12 +28,22 @@
 #   starts. A second invocation sends "toggle" to the socket and exits.
 #   Labwc's Home key binding should call: python3 /path/to/launcher.py
 
-import gi
-gi.require_version("Gtk", "4.0")
-gi.require_version("GtkLayerShell", "0.1")
-
 import os
 import sys
+
+# gtk4-layer-shell >= 1.0 installs its typelib under /usr/local, which is not
+# in gi's default search path on Debian/RPi OS. Find and add it before importing.
+import glob as _glob
+_extra_gi = _glob.glob("/usr/local/lib/*/girepository-1.0")
+if _extra_gi:
+    _existing = os.environ.get("GI_TYPELIB_PATH", "")
+    _extra = ":".join(_extra_gi)
+    if _extra not in _existing:
+        os.environ["GI_TYPELIB_PATH"] = f"{_extra}:{_existing}" if _existing else _extra
+
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gtk4LayerShell", "1.0")
 import json
 import signal
 import socket
@@ -39,7 +55,7 @@ import urllib.error
 from pathlib import Path
 
 from gi.repository import Gtk, GLib, Gdk, GdkPixbuf, Gio, Pango
-from gi.repository import GtkLayerShell
+from gi.repository import Gtk4LayerShell
 
 # ---------------------------------------------------------------------------
 # Configuration paths
@@ -391,20 +407,20 @@ class LauncherWindow(Gtk.ApplicationWindow):
 
     def _setup_layer_shell(self) -> None:
         # gtk4-layer-shell must be initialized before the window is realized
-        GtkLayerShell.init_for_window(self)
-        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
-        GtkLayerShell.set_exclusive_zone(self, -1)   # don't push other surfaces
-        GtkLayerShell.set_keyboard_mode(
-            self, GtkLayerShell.KeyboardMode.EXCLUSIVE
+        Gtk4LayerShell.init_for_window(self)
+        Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
+        Gtk4LayerShell.set_exclusive_zone(self, -1)   # don't push other surfaces
+        Gtk4LayerShell.set_keyboard_mode(
+            self, Gtk4LayerShell.KeyboardMode.EXCLUSIVE
         )
         # Anchor to all edges so it fills the screen
         for edge in (
-            GtkLayerShell.Edge.TOP,
-            GtkLayerShell.Edge.BOTTOM,
-            GtkLayerShell.Edge.LEFT,
-            GtkLayerShell.Edge.RIGHT,
+            Gtk4LayerShell.Edge.TOP,
+            Gtk4LayerShell.Edge.BOTTOM,
+            Gtk4LayerShell.Edge.LEFT,
+            Gtk4LayerShell.Edge.RIGHT,
         ):
-            GtkLayerShell.set_anchor(self, edge, True)
+            Gtk4LayerShell.set_anchor(self, edge, True)
 
     # ------------------------------------------------------------------
     # UI construction
