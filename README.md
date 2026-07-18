@@ -180,7 +180,7 @@ sudo apt install meson ninja-build libgtk-4-dev libwayland-dev \
 
 git clone --depth=1 https://github.com/wmww/gtk4-layer-shell.git
 cd gtk4-layer-shell
-meson setup build -Dexamples=false -Ddocs=false -Dtests=false --prefix=/usr/local
+meson setup build -Dexamples=false -Ddocs=false -Dtests=false -Dvapi=false --prefix=/usr/local
 ninja -C build
 sudo ninja -C build install
 sudo ldconfig

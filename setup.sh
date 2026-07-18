@@ -61,6 +61,7 @@ else
         -Dexamples=false \
         -Ddocs=false \
         -Dtests=false \
+        -Dvapi=false \
         --prefix=/usr/local
 
     ninja -C build
