@@ -41,11 +41,6 @@ if _extra_gi:
     if _extra not in _existing:
         os.environ["GI_TYPELIB_PATH"] = f"{_extra}:{_existing}" if _existing else _extra
 
-# HiDPI scaling for 4K TVs. GDK_SCALE=2 makes GTK render at logical half-resolution
-# (1920×1080) and scale up — doubles UI size and cuts GPU load 4×. Override with
-# GDK_SCALE=1 in the environment if you're on a 1080p display.
-os.environ.setdefault("GDK_SCALE", "2")
-
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")

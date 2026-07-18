@@ -23,6 +23,7 @@ sudo apt-get install -y \
     fonts-noto-color-emoji \
     python3-requests \
     labwc \
+    wlr-randr \
     git \
     meson \
     ninja-build \
@@ -109,10 +110,19 @@ echo "==> Configuring Labwc..."
 mkdir -p "$LABWC_DIR"
 
 # --- autostart ---
+# wlr-randr forces 1080p on the first HDMI output before the launcher starts.
+# GDK_SCALE is not honoured by GTK4 on Wayland — the compositor owns scaling.
+# RPi5 HDMI 0 = HDMI-A-1, HDMI 1 = HDMI-A-2. Adjust if your output differs
+# (run `wlr-randr` inside a Labwc session to list connected outputs and modes).
 AUTOSTART="$LABWC_DIR/autostart"
-AUTOSTART_LINE="python3 $LAUNCHER &"
+if ! grep -qF "wlr-randr" "$AUTOSTART" 2>/dev/null; then
+    echo "wlr-randr --output HDMI-A-1 --mode 1920x1080" >> "$AUTOSTART"
+    echo "    Added wlr-randr 1080p mode-set to $AUTOSTART"
+else
+    echo "    wlr-randr already in autostart, skipping."
+fi
 if ! grep -qF "$LAUNCHER" "$AUTOSTART" 2>/dev/null; then
-    echo "$AUTOSTART_LINE" >> "$AUTOSTART"
+    echo "python3 $LAUNCHER &" >> "$AUTOSTART"
     echo "    Added launcher to $AUTOSTART"
 else
     echo "    Launcher already in autostart, skipping."
