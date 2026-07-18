@@ -247,9 +247,10 @@ def resolve_icon(entry: AppEntry) -> Path | None:
 # GTK Widget: single app tile (icon + name + running dot)
 # ---------------------------------------------------------------------------
 
-ICON_SIZE   = 80   # px
-TILE_WIDTH  = 120
-TILE_HEIGHT = 140
+ICON_SIZE        = 128  # px — unselected
+ICON_SIZE_SEL    = 160  # px — selected (XMB scale-up effect)
+TILE_WIDTH       = 200
+TILE_HEIGHT      = 220
 
 
 class AppTile(Gtk.Box):
@@ -262,6 +263,7 @@ class AppTile(Gtk.Box):
 
         self._icon_widget = Gtk.Image()
         self._icon_widget.set_pixel_size(ICON_SIZE)
+        self._icon_widget.set_vexpand(False)
         self._load_icon()
 
         self._dot = Gtk.Label(label="●")
@@ -299,8 +301,8 @@ class AppTile(Gtk.Box):
 
     def set_selected(self, selected: bool) -> None:
         # XMB effect: selected icon is larger, unselected icons are dimmer
-        self._icon_widget.set_pixel_size(110 if selected else 72)
-        self._icon_widget.set_opacity(1.0 if selected else 0.55)
+        self._icon_widget.set_pixel_size(ICON_SIZE_SEL if selected else ICON_SIZE)
+        self._icon_widget.set_opacity(1.0 if selected else 0.5)
         if selected:
             self.add_css_class("selected-tile")
         else:
@@ -353,32 +355,34 @@ class SubMenu(Gtk.Box):
 
 CSS = b"""
 window {
-    background: linear-gradient(160deg, #0d2b0d 0%, #1a5c1a 50%, #092009 100%);
+    background-color: #0d2b0d;
+}
+/* Gradient lives on the root box, not the window, so GTK's theme can't override it */
+.root-box {
+    background-image: linear-gradient(160deg, #0d2b0d 0%, #1e6b1e 45%, #092009 100%);
 }
 .app-label {
     color: #ffffff;
-    font-size: 14px;
-    text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+    font-size: 20px;
 }
 .selected-tile .app-label {
     font-weight: bold;
 }
 .running-dot {
     color: #a0ffa0;
-    font-size: 12px;
+    font-size: 16px;
     padding: 2px;
 }
 .submenu {
-    background: rgba(0, 0, 0, 0.55);
-    border-left: 3px solid rgba(255,255,255,0.6);
-    border-radius: 0 6px 6px 0;
-    padding: 6px 24px 6px 12px;
-    margin-top: 8px;
+    background-color: rgba(0, 0, 0, 0);
+    border-left: 3px solid rgba(255,255,255,0.7);
+    padding: 4px 32px 4px 16px;
+    margin-top: 4px;
 }
 .submenu-item {
-    color: #cccccc;
-    font-size: 16px;
-    padding: 2px 0;
+    color: #bbbbbb;
+    font-size: 22px;
+    padding: 4px 0;
 }
 .submenu-selected {
     color: #ffffff;
@@ -386,8 +390,7 @@ window {
 }
 .clock-label {
     color: #ffffff;
-    font-size: 15px;
-    text-shadow: 1px 1px 4px rgba(0,0,0,0.9);
+    font-size: 20px;
 }
 """
 
@@ -437,6 +440,8 @@ class LauncherWindow(Gtk.ApplicationWindow):
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         root.set_vexpand(True)
+        root.set_hexpand(True)
+        root.add_css_class("root-box")
 
         # Top bar: clock on the right, matching PSP XMB style
         top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -457,7 +462,7 @@ class LauncherWindow(Gtk.ApplicationWindow):
 
         # Horizontal row of tiles
         self._tiles_box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL, spacing=32
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=48
         )
         self._tiles_box.set_halign(Gtk.Align.CENTER)
         self._tiles_box.set_valign(Gtk.Align.CENTER)
